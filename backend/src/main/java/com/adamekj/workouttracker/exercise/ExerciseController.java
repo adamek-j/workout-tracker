@@ -13,9 +13,9 @@ public class ExerciseController {
     @GetMapping
     public List<ExerciseResponse> getExercises(){
         return List.of(
-                new ExerciseResponse(1L, "Incine Bench Press"),
-                new ExerciseResponse(2L, "Machine Chest Press"),
-                new ExerciseResponse(3L, "Lat Pulldown")
+                new ExerciseResponse(1L, "Incine Bench Press", "CHEST"),
+                new ExerciseResponse(2L, "Machine Chest Press", "CHEST"),
+                new ExerciseResponse(3L, "Lat Pulldown",  "CHEST")
         );
     }
 }
