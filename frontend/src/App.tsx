@@ -11,6 +11,7 @@ type ExerciseSet = {
   id: string
   weightKg: number
   reps: number
+  loggedGroup?: string
 }
 
 type LoggedExercise = {
@@ -23,11 +24,23 @@ type LoggedExercise = {
 type Workout = {
   date: string
   exercises: LoggedExercise[]
+  finishedAt?: string
 }
 
 type SavedData = {
   version: 1
   workouts: Workout[]
+}
+
+type LoadedData = {
+  workouts: Workout[]
+  error: string | null
+}
+
+type GroupScore = {
+  group: string
+  reps: number
+  sets: number
 }
 
 const STORAGE_KEY = 'workout-tracker-v1'
@@ -53,37 +66,89 @@ function dateKey(date: Date): string {
   return `${year}-${month}-${day}`
 }
 
-function isSavedData(value: unknown): value is SavedData {
-  if (typeof value !== 'object' || value === null) return false
-  if (!('version' in value) || value.version !== 1) return false
-  if (!('workouts' in value) || !Array.isArray(value.workouts)) return false
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
 
-  return value.workouts.every(workout =>
-      typeof workout.date === 'string' &&
-      Array.isArray(workout.exercises) &&
-      workout.exercises.every((exercise: LoggedExercise) =>
-          typeof exercise.exerciseId === 'number' &&
-          typeof exercise.name === 'string' &&
-          Array.isArray(exercise.muscleGroups) &&
-          exercise.muscleGroups.every(group => typeof group === 'string') &&
-          Array.isArray(exercise.sets) &&
-          exercise.sets.every(set =>
-              typeof set.id === 'string' &&
-              Number.isFinite(set.weightKg) &&
-              set.weightKg >= 0 &&
-              Number.isInteger(set.reps) &&
-              set.reps > 0
+function isStringArray(value: unknown): value is string[] {
+  return (
+      Array.isArray(value) &&
+      value.every((item: unknown) => typeof item === 'string')
+  )
+}
+
+function isExercise(value: unknown): value is Exercise {
+  return (
+      isRecord(value) &&
+      typeof value.id === 'number' &&
+      Number.isInteger(value.id) &&
+      typeof value.name === 'string' &&
+      isStringArray(value.muscleGroups) &&
+      value.muscleGroups.length > 0
+  )
+}
+
+function isExerciseSet(value: unknown): value is ExerciseSet {
+  return (
+      isRecord(value) &&
+      typeof value.id === 'string' &&
+      typeof value.weightKg === 'number' &&
+      Number.isFinite(value.weightKg) &&
+      value.weightKg >= 0 &&
+      typeof value.reps === 'number' &&
+      Number.isInteger(value.reps) &&
+      value.reps > 0 &&
+      (
+          value.loggedGroup === undefined ||
+          (
+              typeof value.loggedGroup === 'string' &&
+              GROUPS.includes(value.loggedGroup)
           )
       )
   )
 }
 
-function readSavedData(): {
-  workouts: Workout[]
-  error: string | null
-} {
-  const failure = {
-    workouts: [] as Workout[],
+function isLoggedExercise(value: unknown): value is LoggedExercise {
+  return (
+      isRecord(value) &&
+      typeof value.exerciseId === 'number' &&
+      typeof value.name === 'string' &&
+      isStringArray(value.muscleGroups) &&
+      value.muscleGroups.length > 0 &&
+      Array.isArray(value.sets) &&
+      value.sets.every(isExerciseSet)
+  )
+}
+
+function isWorkout(value: unknown): value is Workout {
+  return (
+      isRecord(value) &&
+      typeof value.date === 'string' &&
+      /^\d{4}-\d{2}-\d{2}$/.test(value.date) &&
+      (
+          value.finishedAt === undefined ||
+          (
+              typeof value.finishedAt === 'string' &&
+              Number.isFinite(Date.parse(value.finishedAt))
+          )
+      ) &&
+      Array.isArray(value.exercises) &&
+      value.exercises.every(isLoggedExercise)
+  )
+}
+
+function isSavedData(value: unknown): value is SavedData {
+  return (
+      isRecord(value) &&
+      value.version === 1 &&
+      Array.isArray(value.workouts) &&
+      value.workouts.every(isWorkout)
+  )
+}
+
+function readSavedData(): LoadedData {
+  const failure: LoadedData = {
+    workouts: [],
     error:
         'Could not read workout history. Saving is disabled ' +
         'to avoid overwriting existing data.',
@@ -98,14 +163,58 @@ function readSavedData(): {
 
     const data: unknown = JSON.parse(raw)
 
-    if (!isSavedData(data)) {
-      return failure
-    }
+    if (!isSavedData(data)) return failure
 
     return { workouts: data.workouts, error: null }
   } catch {
     return failure
   }
+}
+
+function rankGroups(workout: Workout): GroupScore[] {
+  const scores = new Map<string, GroupScore>()
+
+  for (const exercise of workout.exercises) {
+    for (const set of exercise.sets) {
+      const group = set.loggedGroup ?? exercise.muscleGroups[0]
+
+      if (!group) continue
+
+      const score = scores.get(group) ?? {
+        group,
+        reps: 0,
+        sets: 0,
+      }
+
+      score.reps += set.reps
+      score.sets += 1
+
+      scores.set(group, score)
+    }
+  }
+
+  return [...scores.values()].sort(
+      (a, b) =>
+          b.reps - a.reps ||
+          a.group.localeCompare(b.group)
+  )
+}
+
+function getDayLabel(workout: Workout): string {
+  if (!workout.finishedAt) return 'In progress'
+
+  const [first, second] = rankGroups(workout)
+
+  if (!first) return 'No sets'
+
+  const includeSecond =
+      second !== undefined &&
+      second.reps >= first.reps * 0.5 &&
+      second.sets >= 3
+
+  return includeSecond
+      ? `${first.group} + ${second.group} day`
+      : `${first.group} day`
 }
 
 function App() {
@@ -117,16 +226,20 @@ function App() {
   const [loading, setLoading] = useState(true)
   const [apiError, setApiError] = useState<string | null>(null)
 
-  const [selectedGroup, setSelectedGroup] = useState('ALL')
+  const [view, setView] = useState<'calendar' | 'day'>('calendar')
+  const [selectedDate, setSelectedDate] = useState(
+      () => dateKey(new Date())
+  )
+  const [visibleMonth, setVisibleMonth] = useState(() => {
+    const today = new Date()
+    return new Date(today.getFullYear(), today.getMonth(), 1)
+  })
+
+  const [selectedGroup, setSelectedGroup] = useState('')
   const [selectedExerciseId, setSelectedExerciseId] = useState('')
   const [weight, setWeight] = useState('')
   const [reps, setReps] = useState('')
   const [message, setMessage] = useState('')
-
-  const [selectedDate, setSelectedDate] = useState(() => dateKey(new Date()))
-  const [visibleMonth, setVisibleMonth] = useState(
-      () => new Date(new Date().getFullYear(), new Date().getMonth(), 1)
-  )
 
   useEffect(() => {
     const controller = new AbortController()
@@ -140,18 +253,30 @@ function App() {
         if (controller.signal.aborted) return
 
         if (!response.ok) {
-          setApiError(`Could not load exercises (HTTP ${response.status}).`)
+          setApiError(
+              `Could not load exercises (HTTP ${response.status}).`
+          )
           return
         }
 
-        const data: Exercise[] = await response.json()
+        const data: unknown = await response.json()
 
-        if (!controller.signal.aborted) {
-          setExercises(data)
+        if (controller.signal.aborted) return
+
+        if (
+            !Array.isArray(data) ||
+            !data.every(isExercise)
+        ) {
+          setApiError('The exercise catalog has an invalid format.')
+          return
         }
+
+        setExercises(data)
       } catch {
         if (!controller.signal.aborted) {
-          setApiError('Could not load exercises. Check your connection.')
+          setApiError(
+              'Could not load exercises. Check that the backend is running.'
+          )
         }
       } finally {
         if (!controller.signal.aborted) {
@@ -166,7 +291,6 @@ function App() {
   }, [])
 
   const filteredExercises = exercises.filter(exercise =>
-      selectedGroup === 'ALL' ||
       exercise.muscleGroups.includes(selectedGroup)
   )
 
@@ -174,10 +298,17 @@ function App() {
       workout => workout.date === selectedDate
   )
 
+  const isFinished = Boolean(selectedWorkout?.finishedAt)
+  const storageBlocked = Boolean(initialData.error)
+
   const totalSets = selectedWorkout?.exercises.reduce(
       (total, exercise) => total + exercise.sets.length,
       0
   ) ?? 0
+
+  const groupScores = selectedWorkout
+      ? rankGroups(selectedWorkout)
+      : []
 
   const firstWeekday = (visibleMonth.getDay() + 6) % 7
   const daysInMonth = new Date(
@@ -188,11 +319,12 @@ function App() {
 
   const calendarCells = Array.from(
       { length: firstWeekday + daysInMonth },
-      (_, index) => index < firstWeekday ? null : index - firstWeekday + 1
+      (_, index) =>
+          index < firstWeekday ? null : index - firstWeekday + 1
   )
 
   function persist(nextWorkouts: Workout[]): boolean {
-    if (initialData.error) return false
+    if (storageBlocked) return false
 
     try {
       const data: SavedData = {
@@ -210,9 +342,36 @@ function App() {
     }
   }
 
+  function clearInputs() {
+    setWeight('')
+    setReps('')
+    setMessage('')
+  }
+
+  function openDay(date: string) {
+    setSelectedDate(date)
+    setSelectedGroup('')
+    setSelectedExerciseId('')
+    clearInputs()
+    setView('day')
+  }
+
+  function chooseGroup(group: string) {
+    setSelectedGroup(group)
+    setSelectedExerciseId('')
+    clearInputs()
+  }
+
+  function chooseExercise(id: number) {
+    setSelectedExerciseId(String(id))
+    clearInputs()
+  }
+
   function addSet(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setMessage('')
+
+    if (storageBlocked || isFinished) return
 
     const exercise = exercises.find(
         item => item.id === Number(selectedExerciseId)
@@ -223,6 +382,8 @@ function App() {
 
     if (
         !exercise ||
+        !GROUPS.includes(selectedGroup) ||
+        !exercise.muscleGroups.includes(selectedGroup) ||
         weight.trim() === '' ||
         reps.trim() === '' ||
         !Number.isFinite(weightKg) ||
@@ -241,6 +402,7 @@ function App() {
       id: crypto.randomUUID(),
       weightKg,
       reps: repetitions,
+      loggedGroup: selectedGroup,
     }
 
     const workout: Workout = selectedWorkout ?? {
@@ -265,7 +427,7 @@ function App() {
             {
               exerciseId: exercise.id,
               name: exercise.name,
-              muscleGroups: exercise.muscleGroups,
+              muscleGroups: [...exercise.muscleGroups],
               sets: [newSet],
             },
           ],
@@ -283,7 +445,7 @@ function App() {
   }
 
   function removeSet(exerciseId: number, setId: string) {
-    if (!selectedWorkout) return
+    if (!selectedWorkout || isFinished || storageBlocked) return
 
     const updatedExercises = selectedWorkout.exercises
         .map(exercise =>
@@ -309,6 +471,49 @@ function App() {
     }
   }
 
+  function finishDay() {
+    if (
+        !selectedWorkout ||
+        totalSets === 0 ||
+        isFinished ||
+        storageBlocked
+    ) {
+      return
+    }
+
+    const updatedWorkout: Workout = {
+      ...selectedWorkout,
+      finishedAt: new Date().toISOString(),
+    }
+
+    const nextWorkouts = workouts.map(workout =>
+        workout.date === selectedDate ? updatedWorkout : workout
+    )
+
+    if (persist(nextWorkouts)) {
+      clearInputs()
+      setView('calendar')
+    }
+  }
+
+  function reopenDay() {
+    if (!selectedWorkout || !isFinished || storageBlocked) return
+
+    const updatedWorkout = { ...selectedWorkout }
+    delete updatedWorkout.finishedAt
+
+    const nextWorkouts = workouts.map(workout =>
+        workout.date === selectedDate ? updatedWorkout : workout
+    )
+
+    if (persist(nextWorkouts)) {
+      setSelectedGroup('')
+      setSelectedExerciseId('')
+      clearInputs()
+      setMessage('Day reopened.')
+    }
+  }
+
   function changeMonth(offset: number) {
     setVisibleMonth(current => new Date(
         current.getFullYear(),
@@ -319,175 +524,303 @@ function App() {
 
   return (
       <main>
-        <h1>Workout Tracker</h1>
-        <p>Historia zapisywana lokalnie w tej przeglądarce.</p>
+        <header>
+          <h1>Workout Tracker</h1>
+          <p className="muted">
+            Your workouts, one day at a time.
+          </p>
+        </header>
 
-        {initialData.error && <p role="alert">{initialData.error}</p>}
+        {initialData.error && (
+            <p role="alert">{initialData.error}</p>
+        )}
+
         {saveError && <p role="alert">{saveError}</p>}
 
-        <section>
-          <h2>Kalendarz</h2>
+        {view === 'calendar' ? (
+            <section aria-labelledby="calendar-title">
+              <h2 id="calendar-title">Calendar</h2>
 
-          <div className="month-navigation">
-            <button type="button" onClick={() => changeMonth(-1)}>
-              ← Poprzedni
-            </button>
+              <div className="month-navigation">
+                <button
+                    type="button"
+                    aria-label="Previous month"
+                    onClick={() => changeMonth(-1)}
+                >
+                  ←
+                </button>
 
-            <strong>
-              {visibleMonth.toLocaleDateString('pl-PL', {
-                month: 'long',
-                year: 'numeric',
-              })}
-            </strong>
+                <strong>
+                  {visibleMonth.toLocaleDateString('en-GB', {
+                    month: 'long',
+                    year: 'numeric',
+                  })}
+                </strong>
 
-            <button type="button" onClick={() => changeMonth(1)}>
-              Następny →
-            </button>
-          </div>
+                <button
+                    type="button"
+                    aria-label="Next month"
+                    onClick={() => changeMonth(1)}
+                >
+                  →
+                </button>
+              </div>
 
-          <div className="calendar">
-            {['Pn', 'Wt', 'Śr', 'Cz', 'Pt', 'So', 'Nd'].map(day => (
-                <span key={day} className="weekday">{day}</span>
-            ))}
+              <div className="calendar">
+                {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(
+                    day => (
+                        <span key={day} className="weekday">
+                  {day}
+                </span>
+                    )
+                )}
 
-            {calendarCells.map((day, index) => {
-              if (day === null) {
-                return <span key={`empty-${index}`} />
-              }
+                {calendarCells.map((day, index) => {
+                  if (day === null) {
+                    return <span key={`empty-${index}`} />
+                  }
 
-              const date = dateKey(new Date(
-                  visibleMonth.getFullYear(),
-                  visibleMonth.getMonth(),
-                  day
-              ))
+                  const date = dateKey(new Date(
+                      visibleMonth.getFullYear(),
+                      visibleMonth.getMonth(),
+                      day
+                  ))
 
-              const workout = workouts.find(item => item.date === date)
+                  const workout = workouts.find(
+                      item => item.date === date
+                  )
+                  const label = workout
+                      ? getDayLabel(workout)
+                      : 'No workout'
 
-              return (
-                  <button
-                      key={date}
-                      type="button"
-                      aria-pressed={date === selectedDate}
-                      aria-label={`${date}, ćwiczeń: ${workout?.exercises.length ?? 0}`}
-                      onClick={() => {
-                        setSelectedDate(date)
-                        setMessage('')
-                      }}
-                  >
-                    <span>{day}</span>
-                    {workout && (
-                        <small>{workout.exercises.length} ćw.</small>
-                    )}
-                  </button>
-              )
-            })}
-          </div>
-        </section>
+                  const isToday = date === dateKey(new Date())
 
-        <section>
-          <h2>Trening: {selectedDate}</h2>
+                  return (
+                      <button
+                          key={date}
+                          type="button"
+                          className={
+                            workout?.finishedAt ? 'finished-day' : ''
+                          }
+                          aria-label={`${date}: ${label}`}
+                          aria-current={isToday ? 'date' : undefined}
+                          onClick={() => openDay(date)}
+                      >
+                        <span>{day}</span>
+                        {workout && <small>{label}</small>}
+                      </button>
+                  )
+                })}
+              </div>
 
-          {loading && <p>Ładowanie katalogu...</p>}
-          {apiError && <p role="alert">{apiError}</p>}
-
-          <form onSubmit={addSet}>
-            <label>
-              Partia
-              <select
-                  value={selectedGroup}
-                  onChange={event => {
-                    setSelectedGroup(event.target.value)
-                    setSelectedExerciseId('')
+              <p className="muted">
+                Select a day to log or review a workout.
+              </p>
+            </section>
+        ) : (
+            <section aria-labelledby="workout-title">
+              <button
+                  type="button"
+                  onClick={() => {
+                    setMessage('')
+                    setView('calendar')
                   }}
               >
-                <option value="ALL">Wszystkie</option>
-                {GROUPS.map(group => (
-                    <option key={group} value={group}>{group}</option>
-                ))}
-              </select>
-            </label>
+                ← Calendar
+              </button>
 
-            <label>
-              Ćwiczenie
-              <select
-                  required
-                  value={selectedExerciseId}
-                  onChange={event => setSelectedExerciseId(event.target.value)}
-              >
-                <option value="">Wybierz ćwiczenie</option>
-                {filteredExercises.map(exercise => (
-                    <option key={exercise.id} value={exercise.id}>
-                      {exercise.name}
-                    </option>
-                ))}
-              </select>
-            </label>
+              <h2 id="workout-title">Workout: {selectedDate}</h2>
 
-            <div className="set-inputs">
-              <label>
-                Ciężar (kg)
-                <input
-                    required
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={weight}
-                    onChange={event => setWeight(event.target.value)}
-                />
-              </label>
+              {selectedWorkout && (
+                  <p className="day-label">
+                    {getDayLabel(selectedWorkout)}
+                  </p>
+              )}
 
-              <label>
-                Powtórzenia
-                <input
-                    required
-                    type="number"
-                    min="1"
-                    step="1"
-                    value={reps}
-                    onChange={event => setReps(event.target.value)}
-                />
-              </label>
-            </div>
+              {!isFinished && (
+                  <>
+                    <h3>Choose a muscle group</h3>
 
-            <button
-                type="submit"
-                disabled={loading || !!apiError || !!initialData.error}
-            >
-              Zapisz serię
-            </button>
-          </form>
+                    <div className="tiles">
+                      {GROUPS.map(group => (
+                          <button
+                              key={group}
+                              type="button"
+                              aria-pressed={selectedGroup === group}
+                              onClick={() => chooseGroup(group)}
+                          >
+                            {group}
+                          </button>
+                      ))}
+                    </div>
 
-          <p role="status">{message}</p>
+                    {loading && <p>Loading exercises...</p>}
+                    {apiError && <p role="alert">{apiError}</p>}
 
-          <p>
-            Ćwiczenia: {selectedWorkout?.exercises.length ?? 0}
-            {' · '}
-            Serie: {totalSets}
-          </p>
+                    {selectedGroup && !loading && !apiError && (
+                        <>
+                          <h3>{selectedGroup} exercises</h3>
 
-          {!selectedWorkout && <p>Brak zapisanych serii tego dnia.</p>}
+                          {filteredExercises.length === 0 && (
+                              <p>No exercises found for this muscle group.</p>
+                          )}
 
-          {selectedWorkout?.exercises.map(exercise => (
-              <article key={exercise.exerciseId}>
-                <h3>{exercise.name}</h3>
-                <p>{exercise.muscleGroups.join(' / ')}</p>
+                          <div className="tiles exercise-tiles">
+                            {filteredExercises.map(exercise => {
+                              const selected =
+                                  selectedExerciseId === String(exercise.id)
 
-                <ol>
-                  {exercise.sets.map(set => (
-                      <li key={set.id}>
-                        <span>{set.weightKg} kg × {set.reps} powt.</span>
-                        <button
-                            type="button"
-                            onClick={() => removeSet(exercise.exerciseId, set.id)}
-                        >
-                          Usuń serię
-                        </button>
-                      </li>
-                  ))}
-                </ol>
-              </article>
-          ))}
-        </section>
+                              return (
+                                  <div
+                                      key={exercise.id}
+                                      className="exercise-tile"
+                                  >
+                                    <button
+                                        type="button"
+                                        aria-pressed={selected}
+                                        aria-expanded={selected}
+                                        onClick={() => chooseExercise(exercise.id)}
+                                    >
+                                      {exercise.name}
+                                    </button>
+
+                                    {selected && (
+                                        <form onSubmit={addSet}>
+                                          <div className="set-inputs">
+                                            <label>
+                                              Weight (kg)
+                                              <input
+                                                  required
+                                                  type="number"
+                                                  min="0"
+                                                  step="0.01"
+                                                  value={weight}
+                                                  onChange={event =>
+                                                      setWeight(event.target.value)
+                                                  }
+                                              />
+                                            </label>
+
+                                            <label>
+                                              Reps
+                                              <input
+                                                  required
+                                                  type="number"
+                                                  min="1"
+                                                  step="1"
+                                                  value={reps}
+                                                  onChange={event =>
+                                                      setReps(event.target.value)
+                                                  }
+                                              />
+                                            </label>
+                                          </div>
+
+                                          <button
+                                              type="submit"
+                                              disabled={storageBlocked}
+                                          >
+                                            Save set
+                                          </button>
+                                        </form>
+                                    )}
+                                  </div>
+                              )
+                            })}
+                          </div>
+                        </>
+                    )}
+                  </>
+              )}
+
+              <p role="status">{message}</p>
+
+              <h3>Logged sets</h3>
+
+              <p>
+                Exercises: {selectedWorkout?.exercises.length ?? 0}
+                {' · '}
+                Sets: {totalSets}
+              </p>
+
+              {totalSets === 0 && (
+                  <p className="muted">No sets logged for this day.</p>
+              )}
+
+              {selectedWorkout?.exercises.map(exercise => (
+                  <article key={exercise.exerciseId}>
+                    <h3>{exercise.name}</h3>
+
+                    <ol className="set-list">
+                      {exercise.sets.map(set => (
+                          <li key={set.id}>
+                    <span>
+                      {set.weightKg} kg × {set.reps} reps
+                      <small>
+                        {set.loggedGroup ?? exercise.muscleGroups[0]}
+                      </small>
+                    </span>
+
+                            {!isFinished && (
+                                <button
+                                    type="button"
+                                    disabled={storageBlocked}
+                                    aria-label={`Remove ${exercise.name} set: ${set.weightKg} kg, ${set.reps} reps`}
+                                    onClick={() =>
+                                        removeSet(exercise.exerciseId, set.id)
+                                    }
+                                >
+                                  Remove
+                                </button>
+                            )}
+                          </li>
+                      ))}
+                    </ol>
+                  </article>
+              ))}
+
+              {groupScores.length > 0 && (
+                  <div className="summary">
+                    <h3>Muscle group summary</h3>
+
+                    <ul>
+                      {groupScores.map(score => (
+                          <li key={score.group}>
+                            <strong>{score.group}</strong>
+                            <span>
+                      {score.reps} reps · {score.sets} sets
+                    </span>
+                          </li>
+                      ))}
+                    </ul>
+                  </div>
+              )}
+
+              {isFinished ? (
+                  <button
+                      type="button"
+                      className="finish-day"
+                      disabled={storageBlocked}
+                      onClick={reopenDay}
+                  >
+                    Reopen day
+                  </button>
+              ) : (
+                  <button
+                      type="button"
+                      className="finish-day"
+                      disabled={totalSets === 0 || storageBlocked}
+                      onClick={finishDay}
+                  >
+                    Finish day
+                  </button>
+              )}
+            </section>
+        )}
+
+        <footer>
+          Saved sets stay in this browser. Unsaved inputs are not stored.
+        </footer>
       </main>
   )
 }

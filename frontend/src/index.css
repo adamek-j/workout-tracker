@@ -15,55 +15,77 @@ body {
 }
 
 main {
-  width: min(100%, 760px);
+  width: min(100%, 960px);
   margin: 0 auto;
-  padding: 20px;
+  padding: 24px;
+}
+
+header {
+  margin-bottom: 24px;
 }
 
 h1 {
+  margin-bottom: 8px;
   font-size: 30px;
 }
 
 h2 {
+  margin-top: 24px;
   font-size: 22px;
+}
+
+h3 {
+  font-size: 17px;
+}
+
+p {
+  line-height: 1.5;
+}
+
+.muted,
+footer {
+  color: #a6b4c8;
 }
 
 section,
 article {
-  margin-top: 20px;
-  padding: 16px;
-  background: #192333;
+  padding: 20px;
   border: 1px solid #344157;
   border-radius: 12px;
+  background: #192333;
 }
 
 article {
+  margin-top: 16px;
   background: #111b29;
 }
 
+article h3 {
+  margin-top: 0;
+}
+
 button,
-input,
-select {
-  font: inherit;
+input {
   min-height: 44px;
   border: 1px solid #53647c;
   border-radius: 8px;
   padding: 10px;
+  font: inherit;
 }
 
 button {
-  cursor: pointer;
   color: inherit;
   background: #26364d;
+  cursor: pointer;
 }
 
-button:hover {
+button:hover:not(:disabled) {
   background: #354b69;
 }
 
 button[aria-pressed="true"] {
-  background: #215a49;
   border-color: #69e0b1;
+  background: #215a49;
 }
 
 button:disabled {
@@ -72,18 +94,16 @@ button:disabled {
 }
 
 button:focus-visible,
-input:focus-visible,
-select:focus-visible {
+input:focus-visible {
   outline: 3px solid #69e0b1;
-  outline-offset: 2px;
+  outline-offset: 3px;
 }
 
-input,
-select {
+input {
   width: 100%;
   min-width: 0;
-  background: #101722;
   color: inherit;
+  background: #101722;
 }
 
 form,
@@ -94,12 +114,12 @@ label {
 
 form {
   gap: 16px;
-  margin: 20px 0;
+  margin-top: 16px;
 }
 
 .set-inputs {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -107,47 +127,147 @@ form {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 16px;
-  flex-wrap: wrap;
+  gap: 12px;
+  margin: 20px 0;
+}
+
+.month-navigation strong {
+  text-align: center;
+}
+
+.month-navigation button {
+  min-width: 44px;
 }
 
 .calendar {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 4px;
+  gap: 6px;
 }
 
 .weekday {
-  text-align: center;
   padding: 8px 0;
+  text-align: center;
+  font-size: 13px;
 }
 
 .calendar button {
   display: flex;
+  min-width: 0;
+  min-height: 112px;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: 4px;
-  min-height: 60px;
-  padding: 4px;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 10px 4px;
+}
+
+.calendar button > span {
+  font-weight: 700;
 }
 
 .calendar small {
-  font-size: 11px;
-  color: #8cf0c7;
+  max-width: 100%;
+  color: #b8e9d7;
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 
-ol {
+.calendar .finished-day {
+  border-color: #438e72;
+  background: #173e32;
+}
+
+.calendar button[aria-current="date"] {
+  outline: 2px solid #8ebfff;
+  outline-offset: -3px;
+}
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 12px;
+  margin: 16px 0;
+}
+
+.tiles > button {
+  min-height: 72px;
+}
+
+.exercise-tiles {
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  align-items: start;
+}
+
+.exercise-tile {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #344157;
+  border-radius: 12px;
+  background: #111b29;
+}
+
+.exercise-tile > button {
+  width: 100%;
+  min-height: 72px;
+  overflow-wrap: anywhere;
+}
+
+.day-label {
+  color: #8cf0c7;
+  font-weight: 700;
+}
+
+.set-list {
   padding-left: 24px;
 }
 
-li {
+.set-list li {
   margin: 12px 0;
+  padding-left: 4px;
 }
 
-li button {
-  margin-left: 12px;
+.set-list li > span {
+  display: inline-block;
+  margin: 0 12px 8px 0;
+}
+
+.set-list small {
+  display: block;
+  margin-top: 4px;
+  color: #a6b4c8;
+}
+
+.summary {
+  margin-top: 24px;
+}
+
+.summary ul {
+  display: grid;
+  gap: 12px;
+  padding: 0;
+  list-style: none;
+}
+
+.summary li {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.summary li span {
+  color: #a6b4c8;
+}
+
+.finish-day {
+  width: 100%;
+  min-height: 52px;
+  margin-top: 24px;
+  border-color: #438e72;
+  background: #215a49;
+  font-weight: 700;
 }
 
 [role="alert"] {
@@ -155,5 +275,44 @@ li button {
 }
 
 [role="status"] {
+  min-height: 24px;
   color: #8cf0c7;
+}
+
+footer {
+  margin-top: 24px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+@media (max-width: 480px) {
+  main {
+    padding: 12px;
+  }
+
+  section,
+  article {
+    padding: 12px;
+  }
+
+  .calendar {
+    gap: 3px;
+  }
+
+  .calendar button {
+    min-height: 98px;
+    padding: 8px 2px;
+  }
+
+  .calendar small {
+    font-size: 10px;
+  }
+
+  .weekday {
+    font-size: 11px;
+  }
+
+  .exercise-tiles {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
